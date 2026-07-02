@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>resources/png/broadcast.png</file>
+    </qresource>
+</RCC>

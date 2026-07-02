@@ -1,0 +1,10 @@
+# build
+tablet/tmp/
+car/tmp/
+
+
+#Makefile
+tablet/Makefile
+tablet/.qmake.stash
+car/Makefile
+car/.qmake.stash

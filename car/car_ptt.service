@@ -1,0 +1,32 @@
+# car_ptt.service - 小车端 PTT 守护进程 systemd 服务
+# 安装路径: /etc/systemd/system/car_ptt.service
+#
+# 使用方法:
+#   sudo cp car_ptt.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable car_ptt
+#   sudo systemctl start car_ptt
+#   sudo systemctl status car_ptt
+#   journalctl -u car_ptt -f
+
+[Unit]
+Description=PTT Voice Intercom - Car Daemon
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/qdialogue/bin/car_ptt 192.168.1.200 9001 9000
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=car_ptt
+
+# 安全加固
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log /tmp
+
+[Install]
+WantedBy=multi-user.target
