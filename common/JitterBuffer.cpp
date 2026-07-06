@@ -118,7 +118,10 @@ void JitterBuffer::onTick()
             pcmData = m_codec->decodePLC(1);
         } else {
             // 没有解码器，填充静音
-            pcmData.fill(0, OpusCodec::FRAME_PCM_SIZE);
+            //pcmData.fill(0, OpusCodec::FRAME_PCM_SIZE);
+            // ✅ 修复：明确生成一帧完整大小的静音数据 (全 0)
+            // 这样即使 FRAME_PCM_SIZE 计算有误，这里也能保证逻辑清晰
+            pcmData = QByteArray(OpusCodec::FRAME_PCM_SIZE, 0);
         }
         m_stats.plcFrames++;
         m_stats.bufferEmpty++;

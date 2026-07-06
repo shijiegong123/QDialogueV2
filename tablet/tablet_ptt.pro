@@ -58,3 +58,10 @@ SOURCES += \
 
 RESOURCES += \
     Resources.qrc
+
+
+
+VERSION = 1.0.0.20260702 #初始代码适用于X86笔记本
+VERSION = 1.1.0.20260706 #适配3588硬件：匹配参数48kzh 2通道（RK3588 的 ES8388 驱动在某些 BSP 版本下，默认只支持 48kHz，双通道）
+
+DEFINES += APP_VERSION=\\\"$$VERSION\\\"

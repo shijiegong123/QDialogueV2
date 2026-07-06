@@ -19,20 +19,28 @@ class OpusCodec : public QObject
     Q_OBJECT
 
 public:
+    //RK3588 的 ES8388 驱动在某些 BSP 版本下，默认只支持 48kHz 或 44.1kHz。
+    //当您请求 16kHz 时，Qt 可能会默默回退（Fallback）到一个不支持的格式，或者 ALSA 底层在做重采样（plughw），
+    //导致实际的数据吞吐速率与您计算的 FRAME_PCM_SIZE 完全错位
+
     // 音频参数常量
-    static constexpr int SAMPLE_RATE    = 16000;   // 采样率 16kHz
-    static constexpr int CHANNELS       = 1;       // 单声道
+    //由于 RK3588 的 ES8388 硬件特性（强制 48000Hz 和双声道）
+    //【修改 1】采样率从 16000 改为 48000，匹配 ES8388 硬件
+    static constexpr int SAMPLE_RATE    = 48000;   // 采样率 48kHz
+    // 【修改 2】通道数从1改为 2 (双声道)，匹配 ES8388 硬件
+    static constexpr int CHANNELS       = 2;       // 声道
     static constexpr int FRAME_DURATION = 20;      // 帧长 20ms
-    static constexpr int FRAME_SAMPLES  = SAMPLE_RATE * FRAME_DURATION / 1000; // 320
-    static constexpr int FRAME_PCM_SIZE = FRAME_SAMPLES * sizeof(qint16);      // 640 bytes
-    static constexpr int MAX_PACKET_SIZE = 4000;   // 编码后最大包大小 (bytes)
+    static constexpr int FRAME_SAMPLES  = SAMPLE_RATE * FRAME_DURATION / 1000; // 960
+    // 960 采样点 * 2 通道 * 2 字节(16bit) = 3840 bytes
+    static constexpr int FRAME_PCM_SIZE = FRAME_SAMPLES * CHANNELS * sizeof(qint16);
+    static constexpr int MAX_PACKET_SIZE = 5000;   // 编码后最大包大小 (bytes)
 
     /**
      * @brief 构造函数
-     * @param bitrate 编码比特率，默认 24000 bps (24kbps 足够语音)
+     * @param bitrate 编码比特率，默认 48000 bps (48kbps 足够语音)
      * @param parent  父对象
      */
-    explicit OpusCodec(int bitrate = 24000, QObject *parent = nullptr);
+    explicit OpusCodec(int bitrate = 48000, QObject *parent = nullptr);
     ~OpusCodec();
 
     /**

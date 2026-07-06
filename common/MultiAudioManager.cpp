@@ -32,7 +32,7 @@ bool MultiAudioManager::initialize()
     m_audioFormat.setSampleType(QAudioFormat::SignedInt);
 
     // ---- Opus 编解码器 ----
-    m_codec = new OpusCodec(24000, this);
+    m_codec = new OpusCodec(48000, this);
     if (!m_codec->initialize()) {
         qCritical() << "[AudioManager] Opus 初始化失败";
         return false;
@@ -392,51 +392,241 @@ void MultiAudioManager::setPttState(PTTState newState)
     }
 }
 
-// ==================== 音频设备 (合并自 AudioManager) ====================
+//// ==================== 音频设备 (合并自 AudioManager)  适用于X86 ====================
+//bool MultiAudioManager::setupAudioInput()
+//{
+//    QAudioDeviceInfo info;
+//    if (!m_inputDeviceName.isEmpty()) {
+//        info = findInputDevice(m_inputDeviceName);
+//        if (info.isNull())
+//            qWarning() << "[AudioManager] 未找到输入设备:" << m_inputDeviceName << "使用默认";
+//    }
+//    if (info.isNull()) info = QAudioDeviceInfo::defaultInputDevice();
+//    if (info.isNull()) {
+//        qCritical() << "[AudioManager] 无可用输入设备! 可用:" << listInputDevices();
+//        return false;
+//    }
+//    if (!info.isFormatSupported(m_audioFormat)) {
+//        m_audioFormat = info.nearestFormat(m_audioFormat);
+//        qWarning() << "[AudioManager] 输入格式调整:" << m_audioFormat.sampleRate() << "Hz";
+//    }
+//    m_audioInput = new QAudioInput(info, m_audioFormat, this);
+//    m_audioInput->setBufferSize(OpusCodec::FRAME_PCM_SIZE * 4);
+//    qDebug() << "[AudioManager] 输入设备:" << info.deviceName();
+//    return true;
+//}
 
+//bool MultiAudioManager::setupAudioOutput()
+//{
+//    QAudioDeviceInfo info;
+//    if (!m_outputDeviceName.isEmpty()) {
+//        info = findOutputDevice(m_outputDeviceName);
+//        if (info.isNull())
+//            qWarning() << "[AudioManager] 未找到输出设备:" << m_outputDeviceName << "使用默认";
+//    }
+//    if (info.isNull()) info = QAudioDeviceInfo::defaultOutputDevice();
+//    if (info.isNull()) {
+//        qCritical() << "[AudioManager] 无可用输出设备! 可用:" << listOutputDevices();
+//        return false;
+//    }
+//    if (!info.isFormatSupported(m_audioFormat)) {
+//        m_audioFormat = info.nearestFormat(m_audioFormat);
+//        qWarning() << "[AudioManager] 输出格式调整:" << m_audioFormat.sampleRate() << "Hz";
+//    }
+//    m_audioOutput = new QAudioOutput(info, m_audioFormat, this);
+//    m_audioOutput->setBufferSize(OpusCodec::FRAME_PCM_SIZE * 4);
+//    qDebug() << "[AudioManager] 输出设备:" << info.deviceName();
+//    return true;
+//}
+
+
+//// ==================== 音频设备 (合并自 AudioManager)  适用于X86 + 3588 ====================
 bool MultiAudioManager::setupAudioInput()
 {
     QAudioDeviceInfo info;
+
+    // 1. 尝试使用用户指定的设备名
     if (!m_inputDeviceName.isEmpty()) {
         info = findInputDevice(m_inputDeviceName);
         if (info.isNull())
-            qWarning() << "[AudioManager] 未找到输入设备:" << m_inputDeviceName << "使用默认";
+            qWarning() << "[AudioManager] 未找到指定的输入设备:" << m_inputDeviceName << "，将尝试自动选择";
     }
-    if (info.isNull()) info = QAudioDeviceInfo::defaultInputDevice();
+
+    // 2. 尝试使用系统默认设备
     if (info.isNull()) {
-        qCritical() << "[AudioManager] 无可用输入设备! 可用:" << listInputDevices();
+        info = QAudioDeviceInfo::defaultInputDevice();
+    }
+
+    // 3. 【关键修复】如果默认设备为空 (RK3588 ALSA 环境常见)，手动遍历寻找硬件设备
+    if (info.isNull()) {
+        qDebug() << "[AudioManager] 系统默认输入设备为空，启动 ALSA 硬件设备回退搜索...";
+        QList<QAudioDeviceInfo> devices = QAudioDeviceInfo::availableDevices(QAudio::AudioInput);
+
+        // 优先级 1: dsnoop (支持多路复用录音，最稳定)
+        for (const QAudioDeviceInfo &dev : devices) {
+            if (dev.deviceName().startsWith("dsnoop:")) {
+                info = dev;
+                break;
+            }
+        }
+        // 优先级 2: plughw (支持自动格式转换)
+        if (info.isNull()) {
+            for (const QAudioDeviceInfo &dev : devices) {
+                if (dev.deviceName().startsWith("plughw:")) {
+                    info = dev;
+                    break;
+                }
+            }
+        }
+        // 优先级 3: default:CARD= (声卡专属默认设备)
+        if (info.isNull()) {
+            for (const QAudioDeviceInfo &dev : devices) {
+                if (dev.deviceName().startsWith("default:CARD=")) {
+                    info = dev;
+                    break;
+                }
+            }
+        }
+        // 优先级 4: hw: (纯硬件，不支持格式转换，作为最后兜底)
+        if (info.isNull()) {
+            for (const QAudioDeviceInfo &dev : devices) {
+                if (dev.deviceName().startsWith("hw:")) {
+                    info = dev;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 最终检查
+    if (info.isNull()) {
+        qCritical() << "[AudioManager] 致命错误: 无可用输入设备! 可用:" << listInputDevices();
         return false;
     }
+
+    // 检查并协商音频格式
     if (!info.isFormatSupported(m_audioFormat)) {
-        m_audioFormat = info.nearestFormat(m_audioFormat);
-        qWarning() << "[AudioManager] 输入格式调整:" << m_audioFormat.sampleRate() << "Hz";
+        QAudioFormat nearest = info.nearestFormat(m_audioFormat);
+        qWarning() << "[AudioManager] 输入设备不完全支持请求的格式，自动调整:"
+                   << m_audioFormat.sampleRate() << "Hz ->" << nearest.sampleRate() << "Hz";
+        m_audioFormat = nearest;
     }
+
     m_audioInput = new QAudioInput(info, m_audioFormat, this);
+
+    // 【关键检查】输入设备：获取声卡实际接受的格式
+    QAudioFormat actualFormat = m_audioInput->format();
+    qWarning() << "=== 音频格式核对 输入设备：===";
+
+    qWarning() << "期望采样率:" << m_audioFormat.sampleRate()
+               << "| 实际采样率:" << actualFormat.sampleRate();
+
+    qWarning() << "期望通道数:" << m_audioFormat.channelCount()
+               << "| 实际通道数:" << actualFormat.channelCount();
+
+    qWarning() << "期望采样大小:" << m_audioFormat.sampleSize()
+               << "| 实际采样大小:" << actualFormat.sampleSize();
+
+
+    // 设置缓冲区：建议设置为帧大小的 4 倍，防止 ALSA 底层 XRUN (缓冲区溢出/欠载)
     m_audioInput->setBufferSize(OpusCodec::FRAME_PCM_SIZE * 4);
-    qDebug() << "[AudioManager] 输入设备:" << info.deviceName();
+
+    qDebug() << "[AudioManager] 音频输入初始化成功，使用设备:" << info.deviceName();
     return true;
 }
 
 bool MultiAudioManager::setupAudioOutput()
 {
     QAudioDeviceInfo info;
+
+    // 1. 尝试使用用户指定的设备名
     if (!m_outputDeviceName.isEmpty()) {
         info = findOutputDevice(m_outputDeviceName);
         if (info.isNull())
-            qWarning() << "[AudioManager] 未找到输出设备:" << m_outputDeviceName << "使用默认";
+            qWarning() << "[AudioManager] 未找到指定的输出设备:" << m_outputDeviceName << "，将尝试自动选择";
     }
-    if (info.isNull()) info = QAudioDeviceInfo::defaultOutputDevice();
+
+    // 2. 尝试使用系统默认设备
     if (info.isNull()) {
-        qCritical() << "[AudioManager] 无可用输出设备! 可用:" << listOutputDevices();
+        info = QAudioDeviceInfo::defaultOutputDevice();
+    }
+
+    // 3. 【关键修复】如果默认设备为空，手动遍历寻找硬件设备
+    if (info.isNull()) {
+        qDebug() << "[AudioManager] 系统默认输出设备为空，启动 ALSA 硬件设备回退搜索...";
+        QList<QAudioDeviceInfo> devices = QAudioDeviceInfo::availableDevices(QAudio::AudioOutput);
+
+        // 优先级 1: dmix (支持多路复用播放，最稳定)
+        for (const QAudioDeviceInfo &dev : devices) {
+            if (dev.deviceName().startsWith("dmix:")) {
+                info = dev;
+                break;
+            }
+        }
+        // 优先级 2: plughw
+        if (info.isNull()) {
+            for (const QAudioDeviceInfo &dev : devices) {
+                if (dev.deviceName().startsWith("plughw:")) {
+                    info = dev;
+                    break;
+                }
+            }
+        }
+        // 优先级 3: default:CARD=
+        if (info.isNull()) {
+            for (const QAudioDeviceInfo &dev : devices) {
+                if (dev.deviceName().startsWith("default:CARD=")) {
+                    info = dev;
+                    break;
+                }
+            }
+        }
+        // 优先级 4: hw:
+        if (info.isNull()) {
+            for (const QAudioDeviceInfo &dev : devices) {
+                if (dev.deviceName().startsWith("hw:")) {
+                    info = dev;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 最终检查
+    if (info.isNull()) {
+        qCritical() << "[AudioManager] 致命错误: 无可用输出设备! 可用:" << listOutputDevices();
         return false;
     }
+
+    // 检查并协商音频格式
     if (!info.isFormatSupported(m_audioFormat)) {
-        m_audioFormat = info.nearestFormat(m_audioFormat);
-        qWarning() << "[AudioManager] 输出格式调整:" << m_audioFormat.sampleRate() << "Hz";
+        QAudioFormat nearest = info.nearestFormat(m_audioFormat);
+        qWarning() << "[AudioManager] 输出设备不完全支持请求的格式，自动调整:"
+                   << m_audioFormat.sampleRate() << "Hz ->" << nearest.sampleRate() << "Hz";
+        m_audioFormat = nearest;
     }
+
     m_audioOutput = new QAudioOutput(info, m_audioFormat, this);
-    m_audioOutput->setBufferSize(OpusCodec::FRAME_PCM_SIZE * 4);
-    qDebug() << "[AudioManager] 输出设备:" << info.deviceName();
+
+    // 【关键检查】输出设备：获取声卡实际接受的格式
+    QAudioFormat actualFormat = m_audioOutput->format();
+
+    qWarning() << "=== 音频格式核对 输出设备：===";
+
+    qWarning() << "期望采样率:" << m_audioFormat.sampleRate()
+               << "| 实际采样率:" << actualFormat.sampleRate();
+
+    qWarning() << "期望通道数:" << m_audioFormat.channelCount()
+               << "| 实际通道数:" << actualFormat.channelCount();
+
+    qWarning() << "期望采样大小:" << m_audioFormat.sampleSize()
+               << "| 实际采样大小:" << actualFormat.sampleSize();
+
+    m_audioOutput->setVolume(0.6);  // 音量
+
+    m_audioOutput->setBufferSize(OpusCodec::FRAME_PCM_SIZE * 15);
+
+    qDebug() << "[AudioManager] 音频输出初始化成功，使用设备:" << info.deviceName();
     return true;
 }
 

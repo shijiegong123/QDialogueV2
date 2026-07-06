@@ -71,7 +71,7 @@ bool OpusCodec::initialize()
 
     m_initialized = true;
     qDebug() << "[OpusCodec] 初始化成功 - 采样率:" << SAMPLE_RATE
-             << "Hz, 帧长:" << FRAME_DURATION << "ms, 比特率:" << m_bitrate << "bps";
+             << "Hz, 通道数："<< CHANNELS<< " ,帧长:" << FRAME_DURATION << "ms, 比特率:" << m_bitrate << "bps";
 
     return true;
 }
@@ -141,14 +141,16 @@ QByteArray OpusCodec::decode(const QByteArray &opusData)
     }
 
     // 分配解码缓冲区
-    opus_int16 pcmBuffer[FRAME_SAMPLES];
+    // ✅ 修复：缓冲区必须能容纳 双声道 的数据 (960 * 2 = 1920 个 int16)
+    // 使用 QVector 替代裸数组，更安全，避免栈溢出风险
+    QVector<opus_int16> pcmBuffer(FRAME_SAMPLES * CHANNELS);
 
     int decodedSamples = opus_decode(
         m_decoder,
         reinterpret_cast<const unsigned char *>(opusData.constData()),
         opusData.size(),
-        pcmBuffer,
-        FRAME_SAMPLES,
+        pcmBuffer.data(),
+        FRAME_SAMPLES,    // 这里依然是每个通道的采样点数，Opus API 要求如此
         0  // 不使用 FEC
     );
 
@@ -158,8 +160,10 @@ QByteArray OpusCodec::decode(const QByteArray &opusData)
     }
 
     // 将解码后的 PCM 数据转换为 QByteArray
-    return QByteArray(reinterpret_cast<const char *>(pcmBuffer),
-                      decodedSamples * sizeof(opus_int16));
+    // 修复：计算总字节数时，必须乘以通道数！
+    // decodedSamples 是单声道的采样点数，总字节 = 采样点 * 通道数 * 2字节
+    int totalBytes = decodedSamples * CHANNELS * sizeof(opus_int16);
+    return QByteArray(reinterpret_cast<const char *>(pcmBuffer.constData()), totalBytes);
 }
 
 QVector<qint16> OpusCodec::decodeToSamples(const QByteArray &opusData)
@@ -170,7 +174,8 @@ QVector<qint16> OpusCodec::decodeToSamples(const QByteArray &opusData)
         return result;
     }
 
-    result.resize(FRAME_SAMPLES);
+    // ✅ 修复：预留双声道的空间
+    result.resize(FRAME_SAMPLES * CHANNELS);
 
     int decodedSamples = opus_decode(
         m_decoder,
@@ -185,7 +190,8 @@ QVector<qint16> OpusCodec::decodeToSamples(const QByteArray &opusData)
         qWarning() << "[OpusCodec] 解码失败:" << opus_strerror(decodedSamples);
         result.clear();
     } else {
-        result.resize(decodedSamples);
+        //修复：调整为实际解码出的总采样点数 (包含双声道)
+        result.resize(decodedSamples * CHANNELS);
     }
 
     return result;
@@ -201,18 +207,20 @@ QByteArray OpusCodec::decodePLC(int numLostPackets)
     result.reserve(FRAME_PCM_SIZE * numLostPackets);
 
     for (int i = 0; i < numLostPackets; ++i) {
-        opus_int16 pcmBuffer[FRAME_SAMPLES];
+        // 修复：使用 QVector 分配双声道缓冲区
+        QVector<opus_int16> pcmBuffer(FRAME_SAMPLES * CHANNELS);
 
         // 传入 nullptr 数据触发 PLC (丢包补偿)
         int decodedSamples = opus_decode(m_decoder, nullptr, 0,
-                                          pcmBuffer, FRAME_SAMPLES, 0);
+                                          pcmBuffer.data(), FRAME_SAMPLES, 0);
         if (decodedSamples < 0) {
             qWarning() << "[OpusCodec] PLC 解码失败:" << opus_strerror(decodedSamples);
             break;
         }
 
-        result.append(reinterpret_cast<const char *>(pcmBuffer),
-                      decodedSamples * sizeof(opus_int16));
+       // 修复：计算字节数时乘以通道数
+       int totalBytes = decodedSamples * CHANNELS * sizeof(opus_int16);
+       result.append(reinterpret_cast<const char *>(pcmBuffer.constData()), totalBytes);
     }
 
     return result;
